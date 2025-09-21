@@ -6,19 +6,30 @@ def cliente():
     tam_max = 50 
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((host, port))
+    try:
+        s.connect((host, port))
+        print(f"[CLIENTE] Conectado ao servidor em {host}:{port}")
 
-    s.send(f"SYN|{tam_max}".encode())
+        s.send(f"SYN|{tam_max}".encode())
+        print(f"[CLIENTE] Enviou: SYN|{tam_max}")
 
-    resposta = s.recv(1024).decode().strip()
-    if resposta.startswith("SYN-ACK|"):
+        resposta = s.recv(1024).decode().strip()
         print(f"[CLIENTE] Recebeu: {resposta}")
-        s.send("ACK".encode())
-        print("[CLIENTE] Handshake concluído com sucesso!")
-    else:
-        print("[CLIENTE] Resposta inválida do servidor.")
 
-    s.close()
+        if resposta.startswith("SYN-ACK|"):
+            s.send("ACK".encode())
+            print("[CLIENTE] Enviou: ACK")
+            print("[CLIENTE] Handshake concluído com sucesso!")
+        else:
+            print(f"[CLIENTE] Resposta inválida do servidor: {resposta}")
+
+    except ConnectionRefusedError:
+        print(f"[CLIENTE ERRO] O servidor pode não estar ativo ou não está escutando na porta {port}.")
+    except Exception as e:
+        print(f"[CLIENTE ERRO] Ocorreu um erro: {e}")
+    finally:
+        s.close()
+        print("[CLIENTE] Conexão fechada.")
 
 if __name__ == "__main__":
     cliente()
