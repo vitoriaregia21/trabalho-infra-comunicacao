@@ -94,7 +94,9 @@ def listener_individual(conn):
             full_message += data
             if seqnum == lastseq:
                 print(f"\n[FULL MESSAGE RECEIVED]\n{full_message}\n")
-                break
+                full_message = ""  
+                continue      
+
         else:
             send_nak(conn, seqnum)
 
@@ -136,7 +138,8 @@ def listener_window(conn, window_size):
 
                 if seqnum == lastseq:
                     print(f"\n[FULL MESSAGE RECEIVED]\n{full_message}\n")
-                    return
+                    full_message = "" 
+                    continue          
 
 # ---------- Main ----------
 def start_server(host='localhost', port=65432):
