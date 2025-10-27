@@ -1,183 +1,83 @@
 import socket
+import hashlib
 
-PAYLOAD_SIZE = 4
-PKT_LEN = 4 + 4 + 4 + 3 
+HOST = "127.0.0.1"
+PORT = 5001
 
-def checksum_for(data_str):
-    return sum(bytearray(data_str.encode())) % 256
+MODOS_ERRO = {"1": "Seguro", "2": "Com Perda", "3": "Com Erro"}
 
-def make_pkt(data, seqnum, lastseq):
-    data_fixed = data.ljust(PAYLOAD_SIZE)[:PAYLOAD_SIZE]
-    seq_s = f"{seqnum:04d}"
-    last_s = f"{lastseq:04d}"
-    ch = checksum_for(data_fixed + seq_s + last_s) % 256
-    ch_s = f"{ch:03d}"
-    return f"{data_fixed}{seq_s}{last_s}{ch_s}"
+def calcular_checksum_manual(dados: str) -> str:
+    soma = 0
+    for i, c in enumerate(dados):
+        soma += (i + 1) * ord(c)
+    return hex(soma)[2:].zfill(8)[:8]
 
-def parse_pkt(pkt):
-    # preserva espaços no conteúdo
-    data = pkt[:PAYLOAD_SIZE]  # sem strip()
-    seq = int(pkt[4:8])
-    last = int(pkt[8:12])
-    ch = int(pkt[12:15])
-    return data, seq, last, ch
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_socket.bind((HOST, PORT))
+server_socket.listen()
+print(f"[SERVER] Aguardando conexões em {HOST}:{PORT}...")
 
-def verify_checksum(data, seqnum, lastseq, rcv_ch):
-    seq_s = f"{seqnum:04d}"
-    last_s = f"{lastseq:04d}"
-    calc = checksum_for(data.ljust(PAYLOAD_SIZE) + seq_s + last_s) % 256
-    return calc == rcv_ch
+conn, addr = server_socket.accept()
+print(f"[SERVER] Conectado por {addr}")
 
-def send_ack(client_conn, seqnum):
-    pkt = make_pkt("ACK", seqnum, 0)
-    client_conn.sendall(pkt.encode())
-    print(f"[SENT ACK] seq={seqnum}")
+try:
+    hs = conn.recv(1024).decode().split(",")
+    protocolo, modo_erro, chunk_size, window_size = hs[0], hs[1], int(hs[2]), int(hs[3])
+    tipo = 'GBN' if protocolo=='1' else 'SR'
+    print(f"[SERVER] Protocolo={tipo}, Modo={MODOS_ERRO[modo_erro]}, PacketMax={chunk_size}, Janela={window_size}")
+    conn.sendall(f"HANDSHAKE_OK:{tipo}".encode())
 
-def send_nak(client_conn, seqnum):
-    pkt = make_pkt("NAK", seqnum, 0)
-    client_conn.sendall(pkt.encode())
-    print(f"[SENT NAK] seq={seqnum}")
-
-def handshake(conn):
-    try:
-        raw = conn.recv(1024).decode()
-    except Exception as e:
-        print("[HANDSHAKE] erro ao receber:", e)
-        return None
-
-    if not raw:
-        return None
-
-    parts = raw.split("|")
-    if len(parts) < 3 or parts[0] != "SYN":
-        print("[HANDSHAKE] formato invalido")
-        return None
-
-    mode = parts[1]
-    try:
-        maxmsg = int(parts[2])
-    except:
-        maxmsg = 30
-
-    WINDOW = 5
-    conn.sendall(f"SYN-ACK|{WINDOW}".encode())
-
-    conn.settimeout(3.0)
-    try:
-        ack = conn.recv(1024).decode()
-        if ack == "ACK":
-            print(f"[HANDSHAKE OK] mode={mode} maxmsg={maxmsg} window={WINDOW}")
-            return {"mode": mode, "maxmsg": maxmsg, "window": WINDOW}
-        else:
-            print("[HANDSHAKE] ACK inválido")
-            return None
-    except socket.timeout:
-        print("[HANDSHAKE] timeout aguardando ACK")
-        return None
-    finally:
-        conn.settimeout(None)
-
-# ---------- Listeners ----------
-def listener_individual(conn):
-    full_message = ""
-    while True:
-        raw = conn.recv(1024).decode()
-        if not raw:
-            print("[CLIENTE DESCONECTOU]")
-            break
-
-        data, seqnum, lastseq, rcv_ch = parse_pkt(raw)
-        print(f"[RECEIVED] data='{data}', seq={seqnum}, last={lastseq}")
-
-        if verify_checksum(data, seqnum, lastseq, rcv_ch):
-            send_ack(conn, seqnum)
-            full_message += data
-            if seqnum == lastseq:
-                print(f"\n[FULL MESSAGE RECEIVED]\n{full_message}\n")
-                full_message = ""  
-                continue      
-
-        else:
-            send_nak(conn, seqnum)
-
-def listener_window(conn, window_size):
-    full_message = ""
-    buffer = ""
-    temp = {}
-    packets_received = []
+    frames_recv = {}
+    if protocolo == "1":
+        expected = 1
+    else:
+        recv_base = 1
+        buffer_sr = {}
 
     while True:
-        raw = conn.recv(4096).decode()
-        if not raw:
-            print("[CLIENTE DESCONECTOU]")
+        data = conn.recv(1024).decode()
+        if not data:
+            continue
+
+        if data == "FIM":
+            conn.sendall("FIM_ACK".encode())
             break
 
-        buffer += raw
+        partes = data.split(" - ")
+        if len(partes) != 4:
+            print(f"[SERVER] Frame inválido: {data}")
+            continue
 
-        while len(buffer) >= PKT_LEN:
-            pkt = buffer[:PKT_LEN]
-            buffer = buffer[PKT_LEN:]
-            data, seqnum, lastseq, rcv_ch = parse_pkt(pkt)
-            print(f"[RECEIVED] data='{data}', seq={seqnum}, last={lastseq}")
+        seq, flag, carga, chk = int(partes[0]), partes[1], partes[2], partes[3]
+        if chk != calcular_checksum_manual(carga) or len(carga) > chunk_size:
+            print(f"[SERVER] Erro no pacote {seq:02d}, enviando NAK")
+            conn.sendall(f"NAK{seq:02d}".encode())
+            continue
 
-            if not verify_checksum(data, seqnum, lastseq, rcv_ch):
-                send_nak(conn, seqnum)
-                continue
+        print(f"[SERVER] Recebido pacote {seq:02d}: '{carga}'")
 
-            temp[seqnum] = data
-            packets_received.append(seqnum)
+        if protocolo == "1":
+            if seq == expected:
+                frames_recv[seq] = carga
+                conn.sendall(f"ACK{seq:02d}".encode())
+                expected += 1
+            else:
+                conn.sendall(f"ACK{expected-1:02d}".encode())
+        elif protocolo == "2":
+            if recv_base <= seq < recv_base + window_size and seq not in buffer_sr:
+                buffer_sr[seq] = carga
+                conn.sendall(f"ACK{seq:02d}".encode())
+                if seq == recv_base:
+                    while recv_base in buffer_sr:
+                        frames_recv[recv_base] = buffer_sr.pop(recv_base)
+                        recv_base += 1
+            else:
+                conn.sendall(f"ACK{seq:02d}".encode())
 
-            if len(packets_received) == window_size or seqnum == lastseq:
-                send_ack(conn, max(packets_received))
-                print(f"[GROUP ACK SENT] last={max(packets_received)}")
+    final = "".join(frames_recv[i] for i in sorted(frames_recv))
+    print(f"[SERVER] Mensagem reconstruída: {final}")
 
-                for s in sorted(packets_received):
-                    full_message += temp[s]
-                temp.clear()
-                packets_received.clear()
-
-                if seqnum == lastseq:
-                    print(f"\n[FULL MESSAGE RECEIVED]\n{full_message}\n")
-                    full_message = "" 
-                    continue          
-
-# ---------- Main ----------
-def start_server(host='localhost', port=65432):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind((host, port))
-    s.listen()
-    print(f"[SERVER] listening on {host}:{port}")
-
-    try:
-        while True:
-            conn, addr = s.accept()
-            print(f"[CONNECTED] from {addr}")
-
-            with conn:
-                params = handshake(conn)
-                if not params:
-                    print("[HANDSHAKE FAILED]")
-                    conn.close()
-                    continue
-
-                mode = params["mode"].upper()
-                if mode == "GBN":
-                    print("[SERVER MODE] Go-Back-N (window)")
-                    listener_window(conn, params["window"])
-                elif mode == "SR":
-                    print("[SERVER MODE] Stop-and-Wait / SR")
-                    listener_individual(conn)
-                else:
-                    print(f"[SERVER MODE] desconhecido ({mode}), usando individual.")
-                    listener_individual(conn)
-
-                print("[SERVER] Sessão finalizada. Aguardando novo cliente...\n")
-
-    except KeyboardInterrupt:
-        print("\n[SERVER] encerrado manualmente.")
-    finally:
-        s.close()
-
-if __name__ == "__main__":
-    start_server()
+finally:
+    conn.close()
+    server_socket.close()
+    print("[SERVER] Conexão encerrada")
