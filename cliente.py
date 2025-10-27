@@ -131,16 +131,26 @@ def send_window(sock, window_size):
 
 def client_interface(sock, params):
     mode = params["mode"].upper()
-    if mode == "GBN":
-        send_window(sock, params["window"])
-    elif mode == "SR":
-        send_individual(sock)
-    else:
-        print("[CLIENT] Unknown mode, defaulting to SR.")
-        send_individual(sock)
 
-    print("[CLIENT] Closing connection.")
-    sock.close()
+    while True:
+        print("\n[1] Send new message")
+        print("[2] Exit")
+        choice = input(">>> ").strip()
+
+        if choice == "1":
+            if mode == "GBN":
+                send_window(sock, params["window"])
+            elif mode == "SR":
+                send_individual(sock)
+            else:
+                print("[CLIENT] Unknown mode, defaulting to SR.")
+                send_individual(sock)
+        elif choice == "2":
+            print("[CLIENT] Closing connection.")
+            sock.close()
+            break
+        else:
+            print("[INVALID OPTION]")
 
 
 def main(server_host='localhost', server_port=65432):
