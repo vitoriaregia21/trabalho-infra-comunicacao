@@ -17,12 +17,11 @@ def make_pkt(data, seqnum, lastseq, corrupt=False):
     return f"{data_fixed}{seq_s}{last_s}{ch_s}"
 
 def parse_pkt(pkt):
-    if len(pkt) != PKT_LEN:
-        raise ValueError("[PARSE ERROR] length mismatch")
-    data = pkt[0:PAYLOAD_SIZE]
-    seqnum = int(pkt[4:8])
-    rcv_ch = int(pkt[12:15])
-    return data.rstrip(), seqnum, rcv_ch
+    data = pkt[:PAYLOAD_SIZE]  # preserva espaços
+    seq = int(pkt[4:8])
+    ch = int(pkt[12:15])
+    return data, seq, ch
+
 
 def verify_checksum(data, seqnum, rcv_ch):
     seq_s = f"{seqnum:04d}"
