@@ -46,12 +46,24 @@ try:
         partes = data.split(" - ")
         if len(partes) != 4:
             print(f"[SERVER] Frame inválido: {data}")
+            try:
+                seq = int(data[:2])
+                conn.sendall(f"NAK{seq:02d}".encode())
+            except:
+                conn.sendall("NAK00".encode())  
             continue
+
 
         seq, flag, carga, chk = int(partes[0]), partes[1], partes[2], partes[3]
         if chk != calcular_checksum_manual(carga) or len(carga) > chunk_size:
             print(f"[SERVER] Erro no pacote {seq:02d}, enviando NAK")
-            conn.sendall(f"NAK{seq:02d}".encode())
+            
+            if protocolo == "1":
+                conn.sendall(f"NAK{seq:02d}".encode())
+            
+            elif protocolo == "2":
+                conn.sendall(f"NAK{seq:02d}".encode())
+            
             continue
 
         print(f"[SERVER] Recebido pacote {seq:02d}: '{carga}'")
