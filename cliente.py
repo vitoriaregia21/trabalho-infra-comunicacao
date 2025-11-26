@@ -1,12 +1,12 @@
-# Cliente.py
 import socket
 import threading
 import hashlib
-import random
 import time
 
 HOST = "127.0.0.1"
 PORT = 5001
+
+CRYPTO_KEY = "vikaesra"
 
 def calcular_checksum_manual(dados: str) -> str:
     soma = 0
@@ -14,26 +14,46 @@ def calcular_checksum_manual(dados: str) -> str:
         soma += (i + 1) * ord(c)  
     return hex(soma)[2:].zfill(8)[:8]
 
+def xor_bytes(data: bytes, key: bytes) -> bytes:
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+def encrypt_text(plaintext: str) -> str:
+    data = plaintext.encode("utf-8")
+    key_bytes = CRYPTO_KEY.encode("utf-8")
+    cipher = xor_bytes(data, key_bytes)
+
+    return cipher.hex()
+
+pacotes_perda_uma_vez = set()
+pacotes_erro_uma_vez = set()
+use_crypto = False
+
 def enviar_pacote(seq: int, carga: str):
-    global modo_erro
+    global modo_erro, use_crypto
     if client_socket.fileno() == -1:
         print(f"[CLIENT] Tentativa de envio ignorada — socket já foi fechado.")
         return
-    
-    if modo_erro in ["2", "3"]:
-        delay = random.uniform(0, 2)
-        time.sleep(delay)
 
-    checksum = calcular_checksum_manual(carga)
+    texto_claro = carga
+    checksum = calcular_checksum_manual(texto_claro)
 
-    if modo_erro == "2" and random.random() < 0.4:
+    payload = texto_claro
+    if use_crypto:
+        payload = encrypt_text(texto_claro)
+
+    if modo_erro == "2" and seq in pacotes_perda_uma_vez:
         print(f"[CLIENT] Pacote {seq:02d} perdido!")
+        pacotes_perda_uma_vez.remove(seq)
         return
 
-    payload = carga
-    if modo_erro == "3" and random.random() < 0.4:
-        payload = "X" * len(carga)
+    if modo_erro == "3" and seq in pacotes_erro_uma_vez:
+        if use_crypto:
+    
+            payload = "0" * len(payload)
+        else:
+            payload = "X" * len(texto_claro)
         print(f"[CLIENT] Pacote {seq:02d} corrompido! (enviado '{payload}')")
+        pacotes_erro_uma_vez.remove(seq)
 
     frame = f"{seq:02d} - S - {payload} - {checksum}"
 
@@ -44,23 +64,6 @@ def enviar_pacote(seq: int, carga: str):
         print(f"[CLIENT] Erro: não foi possível enviar o pacote {seq:02d} — socket fechado.")
         return
 
-    if modo_erro in ["2", "3"] and random.random() < 0.2:
-        tipo = random.choice(["duplicado", "fora_ordem"])
-        time.sleep(0.1)
-
-        if tipo == "duplicado":
-            try:
-                client_socket.sendall(frame.encode())
-                print(f"[CLIENT] Enviado duplicado: {frame}")
-            except OSError:
-                print(f"[CLIENT] Erro ao duplicar o pacote {seq:02d} — socket fechado.")
-        elif tipo == "fora_ordem" and seq > 1:
-            frame_prev = f"{seq-1:02d} - S - {frames[seq-2]} - {calcular_checksum_manual(frames[seq-2])}"
-            try:
-                client_socket.sendall(frame_prev.encode())
-                print(f"[CLIENT] Enviado fora de ordem: {frame_prev}")
-            except OSError:
-                print(f"[CLIENT] Erro ao enviar fora de ordem — socket fechado.")
 
 def ack_listener():
     global send_base
@@ -82,10 +85,9 @@ def ack_listener():
             if protocolo == "1":            
                 if num >= send_base:
                     send_base = num + 1
-                    timers['gbn'].cancel()
+                    if 'gbn' in timers:
+                        timers['gbn'].cancel()
                     if send_base < next_seq:
-                        if 'gbn' in timers:
-                            timers['gbn'].cancel()
                         timers['gbn'] = threading.Timer(timeout, timeout_gbn)
                         timers['gbn'].start()
             elif protocolo == "2":
@@ -106,11 +108,13 @@ def ack_listener():
             num = int(resp[3:5])
             print(f"[CLIENT] Recebeu NAK {num:02d}")
             if protocolo == "1":
-                timers['gbn'].cancel()
+                if 'gbn' in timers:
+                    timers['gbn'].cancel()
                 timeout_gbn()
             else:
                 enviar_pacote(num, frames[num-1])
-                timers[num].cancel()
+                if num in timers:
+                    timers[num].cancel()
                 t = threading.Timer(timeout, lambda idx=num: timeout_sr(idx))
                 timers[num] = t; t.start()
 
@@ -140,7 +144,7 @@ client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client_socket.connect((HOST, PORT))
 
 while True:
-    protocolo = input("Protocolo:\n1=Go‑Back‑N\n2=Repetição Seletiva\n-> ")
+    protocolo = input("Protocolo:\n1=Go-Back-N\n2=Repetição Seletiva\n-> ")
     if protocolo in ["1", "2"]:
         break
     print("Valor inválido! Digite 1 ou 2.")
@@ -150,15 +154,34 @@ while True:
     if modo_erro in ["1", "2", "3"]:
         break
     print("Valor inválido! Digite 1, 2 ou 3.")
+
+resp_crypto = input("Ativar criptografia simétrica? (s/n): ").strip().lower()
+use_crypto = (resp_crypto == "s")
     
 packet_size = 3
-window_size = int(input("Tamanho da janela: "))
 timeout     = float(input("Timeout (segundos): "))
-mensagem    = input("Mensagem a enviar: ")
 
-client_socket.sendall(f"{protocolo},{modo_erro},{packet_size},{window_size}".encode())
+while True:
+    mensagem = input("Mensagem a enviar (mínimo 30 caracteres): ")
+    if len(mensagem) >= 30:
+        break
+    print(f"Mensagem muito curta ({len(mensagem)} caracteres). Digite pelo menos 30.")
+
+crypto_flag = "1" if use_crypto else "0"
+client_socket.sendall(f"{protocolo},{modo_erro},{packet_size},{crypto_flag}".encode())
 resp = client_socket.recv(1024).decode()
 print(f"[CLIENT] Handshake: {resp}")
+
+window_size = None
+if resp.startswith("HANDSHAKE_OK:"):
+    partes = resp.split(":")
+    if len(partes) >= 3:
+        tipo = partes[1]
+        window_size = int(partes[2])
+    else:
+        window_size = 1
+else:
+    window_size = 1
 
 frames     = [mensagem[i:i+packet_size] for i in range(0, len(mensagem), packet_size)]
 n_frames   = len(frames)
@@ -166,6 +189,26 @@ send_base  = 1
 next_seq   = 1
 acked      = set()
 timers     = {}
+
+if modo_erro == "2":
+    entrada = input(f"Informe os números de sequência dos pacotes a serem PERDIDOS (1–{n_frames}), separados por vírgula (ou deixe vazio): ")
+    if entrada.strip():
+        for v in entrada.split(","):
+            v = v.strip()
+            if v.isdigit():
+                idx = int(v)
+                if 1 <= idx <= n_frames:
+                    pacotes_perda_uma_vez.add(idx)
+
+elif modo_erro == "3":
+    entrada = input(f"Informe os números de sequência dos pacotes a serem CORROMPIDOS (1–{n_frames}), separados por vírgula (ou deixe vazio): ")
+    if entrada.strip():
+        for v in entrada.split(","):
+            v = v.strip()
+            if v.isdigit():
+                idx = int(v)
+                if 1 <= idx <= n_frames:
+                    pacotes_erro_uma_vez.add(idx)
 
 listener = threading.Thread(target=ack_listener)
 listener.start()
