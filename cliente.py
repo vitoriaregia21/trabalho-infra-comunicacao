@@ -6,7 +6,7 @@ import time
 HOST = "127.0.0.1"
 PORT = 5001
 
-CRYPTO_KEY = "vikaesra"
+CRYPTO_KEY = "segredo123"
 
 def calcular_checksum_manual(dados: str) -> str:
     soma = 0
@@ -63,7 +63,6 @@ def enviar_pacote(seq: int, carga: str):
     except OSError:
         print(f"[CLIENT] Erro: não foi possível enviar o pacote {seq:02d} — socket fechado.")
         return
-
 
 def ack_listener():
     global send_base
@@ -172,16 +171,25 @@ client_socket.sendall(f"{protocolo},{modo_erro},{packet_size},{crypto_flag}".enc
 resp = client_socket.recv(1024).decode()
 print(f"[CLIENT] Handshake: {resp}")
 
-window_size = None
+
+window_size = 5  # valor padrão caso o handshake venha errado
+
 if resp.startswith("HANDSHAKE_OK:"):
     partes = resp.split(":")
     if len(partes) >= 3:
         tipo = partes[1]
-        window_size = int(partes[2])
-    else:
-        window_size = 1
+        try:
+            w = int(partes[2])
+            if 1 <= w <= 5:
+                window_size = w
+            else:
+                print(f"[CLIENT] Janela inválida recebida ({w}), usando 5.")
+        except ValueError:
+            print("[CLIENT] Erro ao ler tamanho da janela, usando 5.")
 else:
-    window_size = 1
+    print("[CLIENT] Handshake inesperado, usando janela 5.")
+
+print(f"[CLIENT] Janela configurada = {window_size}")
 
 frames     = [mensagem[i:i+packet_size] for i in range(0, len(mensagem), packet_size)]
 n_frames   = len(frames)
