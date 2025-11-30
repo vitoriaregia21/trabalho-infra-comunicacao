@@ -46,12 +46,6 @@ try:
     # envia também o tamanho da janela para o cliente
     conn.sendall(f"HANDSHAKE_OK:{tipo}:{window_size}".encode())
 
-    tipo = 'GBN' if protocolo=='1' else 'SR'
-    print(f"[SERVER] Protocolo={tipo}, Modo={MODOS_ERRO[modo_erro]}, PacketMax={chunk_size}, Janela={window_size}")
-
-    # envia também o tamanho da janela para o cliente
-    conn.sendall(f"HANDSHAKE_OK:{tipo}:{window_size}".encode())
-
     frames_recv = {}
     if protocolo == "1":
         expected = 1
