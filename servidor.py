@@ -38,21 +38,13 @@ try:
     crypto_flag = hs[3]
     use_crypto  = (crypto_flag == "1")
 
-    window_size = 5  
+    window_size = 5
 
-    print("\n--- CONFIGURAÇÃO DA JANELA (SERVIDOR) ---")
-    entrada = input("Informe o tamanho da janela (1–5) [ENTER para usar 5]: ").strip()
+    tipo = 'GBN' if protocolo=='1' else 'SR'
+    print(f"[SERVER] Protocolo={tipo}, Modo={MODOS_ERRO[modo_erro]}, PacketMax={chunk_size}, Janela={window_size}")
 
-    if entrada:
-        if entrada.isdigit():
-            w = int(entrada)
-            if 1 <= w <= 5:
-                window_size = w
-            else:
-                print("[SERVER] Valor fora de 1–5, mantendo 5.")
-        else:
-            print("[SERVER] Entrada inválida, mantendo 5.")
-
+    # envia também o tamanho da janela para o cliente
+    conn.sendall(f"HANDSHAKE_OK:{tipo}:{window_size}".encode())
 
     tipo = 'GBN' if protocolo=='1' else 'SR'
     print(f"[SERVER] Protocolo={tipo}, Modo={MODOS_ERRO[modo_erro]}, PacketMax={chunk_size}, Janela={window_size}")

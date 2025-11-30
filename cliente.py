@@ -66,56 +66,79 @@ def enviar_pacote(seq: int, carga: str):
 
 def ack_listener():
     global send_base
-    while True:
+    buffer = ""
+    fim = False
+
+    while not fim:
         try:
             data = client_socket.recv(1024)
             if not data:
                 break
-            resp = data.decode()
+            buffer += data.decode()
         except ConnectionResetError:
             break
 
-        if resp == "FIM_ACK":
-            break
-
-        if resp.startswith("ACK"):
-            num = int(resp[3:5])
-            print(f"[CLIENT] Recebeu ACK {num:02d}")
-            if protocolo == "1":            
-                if num >= send_base:
-                    send_base = num + 1
-                    if 'gbn' in timers:
-                        timers['gbn'].cancel()
-                    if send_base < next_seq:
-                        timers['gbn'] = threading.Timer(timeout, timeout_gbn)
-                        timers['gbn'].start()
-            elif protocolo == "2":
-                if num not in acked:
-                    acked.add(num)
-                    if num in timers:
-                        timers[num].cancel()
-                        del timers[num]
-                if num == send_base:
-                    while send_base in acked:
-                        send_base += 1
-            
-            else:
-                print(f"[CLIENT] Escolha inválida: {protocolo}")
+        # Processa TODAS as mensagens completas que estiverem no buffer
+        while True:
+            if buffer.startswith("FIM_ACK"):
+                fim = True
+                buffer = buffer[7:]  # remove "FIM_ACK"
                 break
 
-        elif resp.startswith("NAK"):
-            num = int(resp[3:5])
-            print(f"[CLIENT] Recebeu NAK {num:02d}")
-            if protocolo == "1":
-                if 'gbn' in timers:
-                    timers['gbn'].cancel()
-                timeout_gbn()
+            elif buffer.startswith("ACK") and len(buffer) >= 5:
+                msg = buffer[:5]
+                buffer = buffer[5:]
+                num = int(msg[3:5])
+                print(f"[CLIENT] Recebeu ACK {num:02d}")
+
+                if protocolo == "1":  # GBN
+                    if num >= send_base:
+                        send_base = num + 1
+                        if 'gbn' in timers:
+                            timers['gbn'].cancel()
+                        if send_base < next_seq:
+                            timers['gbn'] = threading.Timer(timeout, timeout_gbn)
+                            timers['gbn'].start()
+
+                elif protocolo == "2":  # SR
+                    if num not in acked:
+                        acked.add(num)
+                        if num in timers:
+                            timers[num].cancel()
+                            del timers[num]
+                    if num == send_base:
+                        while send_base in acked:
+                            send_base += 1
+
+                else:
+                    print(f"[CLIENT] Escolha inválida: {protocolo}")
+                    fim = True
+                    break
+
+            elif buffer.startswith("NAK") and len(buffer) >= 5:
+                msg = buffer[:5]
+                buffer = buffer[5:]
+                num = int(msg[3:5])
+                print(f"[CLIENT] Recebeu NAK {num:02d}")
+
+                if protocolo == "1":  # GBN
+                    if 'gbn' in timers:
+                        timers['gbn'].cancel()
+                    timeout_gbn()
+                else:  # SR
+                    enviar_pacote(num, frames[num-1])
+                    if num in timers:
+                        timers[num].cancel()
+                    t = threading.Timer(timeout, lambda idx=num: timeout_sr(idx))
+                    timers[num] = t
+                    t.start()
+
             else:
-                enviar_pacote(num, frames[num-1])
-                if num in timers:
-                    timers[num].cancel()
-                t = threading.Timer(timeout, lambda idx=num: timeout_sr(idx))
-                timers[num] = t; t.start()
+                # Se não tem mensagem completa, espera mais dados
+                if len(buffer) < 5:
+                    break
+                # descarta 1 caractere "lixo" e tenta de novo
+                buffer = buffer[1:]
 
     print("[CLIENT] Listener encerrado")
 
@@ -230,20 +253,24 @@ if protocolo == "1":
             next_seq += 1
         time.sleep(0.1)
 else:
-    while next_seq <= n_frames:
-        enviar_pacote(next_seq, frames[next_seq-1])
-        t = threading.Timer(timeout, lambda idx=next_seq: timeout_sr(idx))
-        timers[next_seq] = t; t.start()
-        next_seq += 1
-
     max_wait = time.time() + timeout * 20
-    while len(acked) < n_frames:
+
+    while len(acked) < n_frames and time.time() <= max_wait:
+        # preenche a janela enquanto houver espaço
+        while next_seq <= n_frames and next_seq <= send_base + window_size - 1:
+            enviar_pacote(next_seq, frames[next_seq-1])
+            if next_seq not in timers:
+                t = threading.Timer(timeout, lambda idx=next_seq: timeout_sr(idx))
+                timers[next_seq] = t
+                t.start()
+            next_seq += 1
+
         faltando = [i for i in range(1, n_frames+1) if i not in acked]
-        print(f"[CLIENT] Aguardando ACKs: {faltando}")
-        if time.time() > max_wait:
-            print("[CLIENT] Tempo máximo de espera excedido. Encerrando.")
-            break
-        time.sleep(0.5)
+        print(f"[CLIENT] Aguardando ACKs (SR): {faltando}")
+        time.sleep(0.2)
+
+    if len(acked) < n_frames:
+        print("[CLIENT] Tempo máximo de espera excedido. Encerrando.")
 
 client_socket.sendall("FIM".encode())
 
